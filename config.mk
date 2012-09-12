@@ -1,5 +1,5 @@
 # sltar version
-VERSION = 0.2.2a
+VERSION = 0.2.2b
 
 # Customize below to fit your system
 

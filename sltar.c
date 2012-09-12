@@ -11,28 +11,94 @@
 #include <sys/stat.h>
 
 /*
+ * DONE:
+ * 1. Added TAR header checksum validation. 
+ * The checksum is calculated by taking the sum of the unsigned byte values of 
+ * the header block with the eight checksum bytes taken to be ascii spaces 
+ * (decimal value 32). It is stored as a six digit octal number with leading zeroes 
+ * followed by a NUL and then a space. Various implementations do not adhere 
+ * to this format. For better compatibility, ignore leading and trailing 
+ * whitespace, and get the first six digits.
+ *
+ *
  * TODO:
  * 1. add archive creation capabilities
- * 2. fix the extraction bug when the archive does not directory block.
+ * 2. FIXME: fix the extraction bug when the archive does not directory block.
  * 3. suckless has refused the gzip/bzip2, although it's listed on their website. 
  *    Since it's done already - I leave it for now.
  */
 
-#define C		 (1   )	/* create */
-#define X		 (1<<1)	/* extract */
-#define T		 (1<<2)	/* test */
-#define V		 (1<<3)	/* verbose */
-#define F		 (1<<4)	/* file */
-#define Z		 (1<<5)	/* gzip/ungzip */
-#define J		 (1<<6)	/* bzip/bunzip2 */
+#define C    (1   ) /* create */
+#define X    (1<<1) /* extract */
+#define T    (1<<2) /* test */
+#define V    (1<<3) /* verbose */
+#define F    (1<<4) /* file */
+#define Z    (1<<5) /* gzip/ungzip */
+#define J    (1<<6) /* bzip/bunzip2 */
 
-#define GUZ	 "gunzip -c "
-#define BUZ	 "bunzip2 -c "
+#define GUZ  "gunzip -c "
+#define BUZ  "bunzip2 -c "
 
 enum Header {
-  MODE = 100, UID = 108, GID = 116, SIZE = 124, MTIME = 136,
+  MODE = 100, UID = 108, GID = 116, SIZE = 124, MTIME = 136, CHK = 148,
   TYPE = 156, LINK = 157, MAJ = 329, MIN = 337, END = 512
 };
+
+static void get_chksum(const char *buf, char *schksum); 
+static int c(void);
+static int xt(char a, char *fin_name);
+
+int
+main(int argc, char *argv[])
+{
+  int i;
+  char a = 0;
+
+  if (argc > 1) 
+    for(i = 0; i < strlen(argv[1]); i++)
+      switch(argv[1][i]) {
+        case 'c': a |= C; break;  /* create */        /* TODO: Needs to be implemented */
+        case 'x': a |= X; break;  /* extract */
+        case 't': a |= T; break;  /* test */
+        case 'v': a |= V; break;  /* verbose */       /* TODO: to be implemented in c(...) */
+        case 'f': a |= F; 
+                  if (!argv[2]) {
+                    fputs("error: invalid arguments", stderr);
+                    return EXIT_FAILURE;
+                  }
+                  break;          /* file */
+        case 'z': a |= Z; break;  /* gzip/gunzip */   /* TODO: GZIP c(...): to be implemented */
+        case 'j': a |= J; break;  /* bzip2/bunzip2 */ /* TODO: BZIP2 c(...): to be implemented */
+        default:
+                  fputs("error: unknown option. exiting...\n", stderr);
+                  return EXIT_FAILURE;
+      }
+
+  if (a & X || a & T)
+    return xt(a, argv[2]);
+  else if (a & C)
+    return c();
+  else 
+    fputs("sltar " VERSION " - suckless tar\nusage: sltar {ctx}[fjvz] <filename>\n", stderr);
+
+  return EXIT_SUCCESS;
+}
+
+
+static void /* getting string representation of octal header checksum in schksum */
+get_chksum(const char *buf, char *schksum) /* buf - full tar header */
+{ 
+  int i;
+  unsigned chksum = 0;
+  unsigned char b[END] = { 0 };
+
+  memcpy(b, buf, END);
+  memset(b+CHK, ' ', 8); /* setting checksum header to ' '[8] */
+  for (i = 0; i < END; i++) 
+    chksum += (unsigned char)b[i];
+
+  snprintf(schksum, 8, "0%o", chksum);
+}
 
 static int /* create archive */
 c(void) /* to be revised */
@@ -44,10 +110,12 @@ c(void) /* to be revised */
 static int /* extract */
 xt(char a, char *fin_name)
 {
+  int ret = EXIT_SUCCESS;
   int l;
   char b[END],fname[101],lname[101];
-  FILE *fin = NULL;		 /* file handle for reading */
-  FILE *fout = NULL;		 /* file handle for writing */
+  FILE *fin = NULL;     /* file handle for reading */
+  FILE *fout = NULL;    /* file handle for writing */
+  char chksum[8] = {0};
   char cmd[120] = "\0";
 
   /* TODO: review/rewrite the code */
@@ -60,7 +128,7 @@ xt(char a, char *fin_name)
         return EXIT_FAILURE;
       }
     }
-    else {	/* tar file */
+    else {  /* tar file */
       if (!(fin = fopen(fin_name, "r"))) {
         perror(fin_name);
         return EXIT_FAILURE;
@@ -81,6 +149,14 @@ xt(char a, char *fin_name)
     if(l <= 0) {
       if(*b == '\0')
         break;
+
+      get_chksum(b, chksum); /* calculating header checksum */
+      if (strncmp(b+CHK, chksum, 7) != 0) { /* validating checksum */
+        fputs("ERROR: checksum did not match.\n", stderr);
+        ret = EXIT_FAILURE;
+        goto error;
+      }
+
       memcpy(fname,b,100);
       memcpy(lname,b + LINK,100);
       l = strtoull(b + SIZE,0,8) + END;
@@ -136,6 +212,7 @@ xt(char a, char *fin_name)
       break;
     }
 
+error:
   if (fout)
     fclose(fout);
   if (a & F && fin_name && fin) {
@@ -145,41 +222,8 @@ xt(char a, char *fin_name)
       fclose(fin);
   }
 
-  return EXIT_SUCCESS;
+  return ret;
 }
 
-int main(int argc, char *argv[]) {
-  int i;
-  char a = 0;
-
-  if (argc > 1) 
-    for(i = 0; i < strlen(argv[1]); i++)
-      switch(argv[1][i]) {
-        case 'c': a += C; break;	/* create */		/* TODO: Needs to be implemented */
-        case 'x': a += X; break;	/* extract */
-        case 't': a += T; break;	/* test */
-        case 'v': a += V; break;	/* verbose */		/* TODO: to be implemented in c(...) */
-        case 'f': a += F; 
-                  if (!argv[2]) {
-                    fputs("error: invalid arguments", stderr);
-                    return EXIT_FAILURE;
-                  }
-                  break;      	/* file */
-        case 'z': a += Z; break;	/* gzip/gunzip */	/* TODO: GZIP c(...): to be implemented */
-        case 'j': a += J; break;	/* bzip2/bunzip2 */	/* TODO: BZIP2 c(...): to be implemented */
-        default:
-                  fputs("error: unknown option. exiting...\n", stderr);
-                  return EXIT_FAILURE;
-      }
-
-  if (a & X || a & T)
-    return xt(a, argv[2]);
-  else if (a & C)
-    return c();
-  else 
-    fputs("sltar " VERSION " - suckless tar\nusage: sltar {ctx}[fjvz] <filename>\n", stderr);
-
-  return EXIT_SUCCESS;
-}
 /* EOF */
 
