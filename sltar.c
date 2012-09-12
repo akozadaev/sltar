@@ -90,12 +90,9 @@ get_chksum(const char *buf, char *schksum) /* buf - full tar header */
 { 
   int i;
   unsigned chksum = 0;
-  unsigned char b[END] = { 0 };
-
-  memcpy(b, buf, END);
-  memset(b+CHK, ' ', 8); /* setting checksum header to ' '[8] */
+  
   for (i = 0; i < END; i++) 
-    chksum += (unsigned char)b[i];
+    chksum += (i >= CHK && i < CHK+8) ? ' ' : (unsigned char)buf[i];
 
   snprintf(schksum, 8, "0%o", chksum);
 }
